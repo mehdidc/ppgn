@@ -348,20 +348,16 @@ def _flatten(x):
 
 def main(*, imageSize=64, dataroot='.', classifier='alexnet', 
          batchSize=128, nThreads=1, clfImageSize=224, nz=4096,
-         niter=100):
-    outf = '{{folder}}'
+         extra_noise=0,
+         niter=100,
+         outf='out'):
     lr = 0.0002
     beta1 = 0.5
-    gan_loss_coef = {{'gan_loss_coef' | loguniform(-3, 2) }}
-    pixel_loss_coef = {{'pixel_loss_coef' | loguniform(-3, 2) }}
-    feature_loss_coef = {{'feature_loss_coef' | loguniform(-3, 2) }}
-    rec_loss_coef = {{'rec_loss_coef' | loguniform(-3, 2) }}
-
-
-    viz = Visdom('http://romeo163')
-    win = viz.line(X=np.array([0]), Y=np.array([0]), opts=dict(title='ppgn, started at {}, folder={}'.format(datetime.now(), outf)))
-
-    viz.line(X=np.array([0]), Y=np.array([0]), update='append', win=win)
+    # from 3dd31b98c3b774bb5b0ee830e9eae755
+    gan_loss_coef = 0.0019383295178557445
+    pixel_loss_coef = 3.537774293689844
+    feature_loss_coef = 0.24044475937918727
+    rec_loss_coef = 0.0011085183991707557
 
     transform = transforms.Compose([
         transforms.Scale(imageSize),
@@ -393,29 +389,28 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
         x = x / clf_std.repeat(x.size(0), 1, x.size(2), x.size(3))
         return x
     
-    def classify(x):
+    def prep(x):
         if x.size(2) != 256:
             x = torch.nn.UpsamplingBilinear2d(scale_factor=256//x.size(2))(x)
         p = 256 - clfImageSize
         if p > 0:
             x = x[:, :, p//2:-p//2, p//2:-p//2]
         x = norm(x)
+        return x
+
+    def classify(x):
         features = clf.features
         classifier = clf.classifier
+        x = prep(x)
         x = features(x)
         x = _flatten(x)
         y = classifier(x)
         return y 
  
     def encode(x):
-        if x.size(2) != 256:
-            x = torch.nn.UpsamplingBilinear2d(scale_factor=256//x.size(2))(x)
-        p = 256 - clfImageSize
-        if p > 0:
-            x = x[:, :, p//2:-p//2, p//2:-p//2]
-        x = norm(x)
         features = clf.features
         classifier = clf.classifier
+        x = prep(x)
         x = features(x)
         x = _flatten(x)
         x = classifier[0](x)
@@ -424,18 +419,13 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
         return x
 
     def encode2(x):
-        if x.size(2) != 256:
-            x = torch.nn.UpsamplingBilinear2d(scale_factor=256//x.size(2))(x)
-        p = 256 - clfImageSize
-        if p > 0:
-            x = x[:, :, p:-p, p:-p]
         features = clf.features
-        x = norm(x)
+        x = prep(x)
         x = features(x)
         x = _flatten(x)
         return x
 
-    netG = Gen(nz=nz, imageSize=imageSize)
+    netG = Gen(nz=nz + extra_noise, imageSize=imageSize)
     netG.apply(weights_init)
  
     netD = Discr(nc=3, ndf=64, imageSize=imageSize)
@@ -445,19 +435,21 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
     label = torch.FloatTensor(batchSize)
     input = Variable(input)
     label = Variable(label)
+    if extra_noise:
+        noise = torch.FloatTensor(batchSize, extra_noise, 1, 1)
+        noise = Variable(noise).cuda()
+        fixed_noise = torch.FloatTensor(batchSize, extra_noise, 1, 1)
+        fixed_noise.normal_(0, 1)
+        fixed_noise = Variable(fixed_noise).cuda()
  
     real_label = 1
     fake_label = 0
-    #criterion = nn.BCELoss()
-    #criterion = nn.MSELoss()
     mse = lambda x,y: 0.5 * ((x - y)**2).view(x.size(0), -1).mean()
-    #mse = lambda x,y: 0.5 * (((x - y)**2).view(x.size(0), -1).sum()) / x.size(0)
     criterion = mse
 
     clf = clf.cuda()
     netG = netG.cuda()
     netD = netD.cuda()
-    #criterion = criterion.cuda()
     input = input.cuda()
     label = label.cuda()
 
@@ -475,7 +467,8 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
             batch_size = real_cpu.size(0)
             input.data.resize_(real_cpu.size()).copy_(real_cpu)
             label.data.resize_(batch_size).fill_(real_label)
-
+            if extra_noise:
+                noise.data.resize_(batch_size, extra_noise, 1, 1).normal_(0, 1)
             output = netD(input)
             errD_real = mse(output, label)
             errD_real.backward()
@@ -484,6 +477,8 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
             # train with fake
             hid = encode(input)
             hid = hid.view(batch_size, nz, 1, 1)
+            if extra_noise:
+                hid = torch.cat((hid, noise), 1)
             fake = netG(hid)
             label.data.fill_(fake_label)
             output = netD(fake.detach())
@@ -524,18 +519,11 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
             print('[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f / %.4f, time : %.4f'
                   % (epoch, niter, i, len(dataloader),
                      errD.data[0], errG.data[0], D_x, D_G_z1, D_G_z2, delta_t))
-            viz.updateTrace(X=np.array([stats['iter'][-1]]), Y=np.array([stats['loss'][-1]]), win=win, name='loss')
-            viz.updateTrace(X=np.array([stats['iter'][-1]]), Y=np.array([stats['gan_loss'][-1]]), win=win, name='gan_loss')
-            viz.updateTrace(X=np.array([stats['iter'][-1]]), Y=np.array([stats['pixel_loss'][-1]]), win=win, name='pixel_loss')
-            viz.updateTrace(X=np.array([stats['iter'][-1]]), Y=np.array([stats['feature_loss'][-1]]), win=win, name='feature_loss')
-            viz.updateTrace(X=np.array([stats['iter'][-1]]), Y=np.array([stats['objectness'][-1]]), win=win, name='objectness')
-            viz.updateTrace(X=np.array([stats['iter'][-1]]), Y=np.array([stats['rec_loss'][-1]]), win=win, name='rec_loss')
             if nb_updates % 100 == 0:
                 pd.DataFrame(stats).to_csv('{}/stats.csv'.format(outf), index=False)
                 # the first 64 samples from the mini-batch are saved.
                 vutils.save_image((real_cpu[0:64,:,:,:]+1)/2.,
                         '%s/real_samples.png' % outf, nrow=8)
-                #fake = netG(hid)
                 vutils.save_image((fake.data[0:64,:,:,:]+1)/2.,
                         '%s/fake_samples_epoch_%03d.png' % (outf, epoch), nrow=8)
 
@@ -544,6 +532,7 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
         torch.save(netG.state_dict(), '%s/netG.pth' % (outf))
         torch.save(netD.state_dict(), '%s/netD.pth' % (outf))
     return avg_objectness
+
 
 if __name__ == '__main__':
     result = run(main)
