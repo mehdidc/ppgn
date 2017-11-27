@@ -1,29 +1,25 @@
 from __future__ import print_function
+import numpy as np
+import torch
 from collections import defaultdict
-from datetime import datetime
 import math
-from visdom import Visdom
-
+from skimage.io import imsave
 import pandas as pd
 import time
 import sys
-import numpy as np
-import argparse
 import os
-import random
-import torch
 from torch.nn.init import xavier_uniform
 import torch.nn as nn
 import torch.nn.parallel
-import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.utils.data
 from torchvision import datasets
 import torchvision.transforms as transforms
-import torchvision.utils as vutils
 from torch.autograd import Variable
 
 from torchvision.models import alexnet
+
+from machinedesign.viz import grid_of_images_default
 
 from clize import run
 
@@ -332,6 +328,103 @@ class DCGAN(nn.Module):
     def forward(self, input):
         return self.conv(input)
 
+
+class PPGen(nn.Module):
+    def __init__(self, nz=4096):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(nz,  4096), #defc7
+            nn.BatchNorm1d(4096),
+            nn.LeakyReLU(0.3),
+            nn.Linear(4096, 4096), #defc6
+            nn.BatchNorm1d(4096),
+            nn.LeakyReLU(0.3),
+            nn.Linear(4096, 4096), #defc5
+            nn.BatchNorm1d(4096),
+            nn.LeakyReLU(0.3),
+        )
+        self.conv = nn.Sequential(
+            nn.ConvTranspose2d(256, 256, 4, 2, 1, bias=False), #deconv5
+            nn.BatchNorm2d(256), 
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(256, 512, 3, 1, 1, bias=False), #conv5_1
+            nn.BatchNorm2d(512), 
+            nn.LeakyReLU(0.3),
+
+            nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False), #decon4
+            nn.BatchNorm2d(256), 
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(256, 256, 3, 1, 1, bias=False), #conv4_1
+            nn.BatchNorm2d(256), 
+            nn.LeakyReLU(0.3),
+            
+            nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False), #deconv3
+            nn.BatchNorm2d(128), 
+            nn.LeakyReLU(0.3),
+            nn.Conv2d(128, 128, 3, 1, 1, bias=False), #conv3_1
+            nn.BatchNorm2d(128), 
+            nn.LeakyReLU(0.3),
+         
+            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False), #deconv2
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.3),
+
+            nn.ConvTranspose2d(64, 32, 4, 2, 1, bias=False), #deconv1
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.3),
+            
+            nn.ConvTranspose2d(32, 3, 4, 2, 1, bias=False), #deconv0
+            nn.Tanh(),
+        )
+
+    def forward(self, input):
+        x = input.view(input.size(0), input.size(1))
+        x = self.fc(x)
+        x = x.view(x.size(0), 256, 4, 4)
+        x = self.conv(x)
+        return x
+
+
+class PPDiscr(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.BatchNorm2d(192),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.BatchNorm2d(384),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+        )
+        self.classifier = nn.Sequential(
+            nn.Linear(256 * 7 * 7, 4096),
+            nn.BatchNorm1d(4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, 4096),
+            nn.BatchNorm1d(4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, 1),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), 256 * 7 * 7)
+        x = self.classifier(x)
+        return x[:, 0]
+
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
@@ -346,71 +439,81 @@ def weights_init(m):
 def _flatten(x):
     return x.view(x.size(0), -1)
 
-def main(*, imageSize=64, dataroot='.', classifier='alexnet', 
-         batchSize=128, nThreads=1, clfImageSize=224, nz=4096,
-         extra_noise=0,
-         niter=100,
-         outf='out'):
-    lr = 0.0002
-    beta1 = 0.5
-    # from 3dd31b98c3b774bb5b0ee830e9eae755
-    gan_loss_coef = 0.0019383295178557445
-    pixel_loss_coef = 3.537774293689844
-    feature_loss_coef = 0.24044475937918727
-    rec_loss_coef = 0.0011085183991707557
+Generator = PPGen
 
-    transform = transforms.Compose([
-        transforms.Scale(imageSize),
-        transforms.CenterCrop(imageSize),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-    ])
+class Encoder(nn.Module):
+
+    def __init__(self, num_classes=1000):
+        super(Encoder, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+        )
+        self.classifier = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(256 * 6 * 6, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, num_classes),
+        )
+        self.image_mean = None
     
-    traindir = os.path.join(dataroot)
-    train = datasets.ImageFolder(traindir, transform)
-    dataloader = torch.utils.data.DataLoader(
-        train, batch_size=batchSize, shuffle=True, num_workers=nThreads)
-   
-    if classifier == 'alexnet':
-        clf = alexnet(pretrained=True)
-    else:
-        sys.path.append(os.path.dirname(classifier))
-        clf = torch.load(classifier)
-    clf.eval()
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), 256 * 6 * 6)
+        x = self.classifier(x)
+        return x
 
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
-    clf_mean = Variable(torch.FloatTensor(mean).view(1, -1, 1, 1)).cuda()
-    clf_std = Variable(torch.FloatTensor(std).view(1, -1, 1, 1)).cuda()
 
-    def norm(x):
+class Enc:
+
+    def __init__(self, clf, mu, std, image_size=224):
+        self.clf = clf
+        self.mu = mu
+        self.std = std
+        self.clfImageSize = image_size
+
+    def norm(self, x):
         x = (x + 1) / 2.
-        x = x - clf_mean.repeat(x.size(0), 1, x.size(2), x.size(3))
-        x = x / clf_std.repeat(x.size(0), 1, x.size(2), x.size(3))
+        x = x - self.mu.repeat(x.size(0), 1, x.size(2), x.size(3))
+        x = x / self.std.repeat(x.size(0), 1, x.size(2), x.size(3))
         return x
     
-    def prep(x):
+    def prep(self, x):
         if x.size(2) != 256:
             x = torch.nn.UpsamplingBilinear2d(scale_factor=256//x.size(2))(x)
-        p = 256 - clfImageSize
+        p = 256 - self.clfImageSize
         if p > 0:
             x = x[:, :, p//2:-p//2, p//2:-p//2]
-        x = norm(x)
+        x = self.norm(x)
         return x
 
-    def classify(x):
-        features = clf.features
-        classifier = clf.classifier
-        x = prep(x)
+    def classify(self, x):
+        features = self.clf.features
+        classifier = self.clf.classifier
+        x = self.prep(x)
         x = features(x)
         x = _flatten(x)
         y = classifier(x)
         return y 
  
-    def encode(x):
-        features = clf.features
-        classifier = clf.classifier
-        x = prep(x)
+    def encode(self, x):
+        features = self.clf.features
+        classifier = self.clf.classifier
+        x = self.prep(x)
         x = features(x)
         x = _flatten(x)
         x = classifier[0](x)
@@ -418,18 +521,79 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
         x = classifier[2](x)
         return x
 
-    def encode2(x):
-        features = clf.features
-        x = prep(x)
+    def encode2(self, x):
+        features = self.clf.features
+        x = self.prep(x)
         x = features(x)
         x = _flatten(x)
         return x
 
-    netG = Gen(nz=nz + extra_noise, imageSize=imageSize)
-    netG.apply(weights_init)
- 
-    netD = Discr(nc=3, ndf=64, imageSize=imageSize)
-    netD.apply(weights_init)
+
+
+def train(*, 
+         imageSize=256, 
+         dataroot='/home/mcherti/work/data/shoes/ut-zap50k-images', 
+         classifier='alexnet', 
+         batchSize=64, 
+         nThreads=1, 
+         clfImageSize=224, 
+         nz=4096,
+         extra_noise=0,
+         niter=100000,
+         outf='out',
+         resume=False,
+         wasserstein=False):
+    lr = 0.0002
+    beta1 = 0.5
+    gan_loss_coef = 0.1
+    pixel_loss_coef = 0.001
+    feature_loss_coef = 0.01
+    rec_loss_coef = 1
+    transform = transforms.Compose([
+        transforms.Scale(imageSize),
+        transforms.CenterCrop(imageSize),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        #transforms.Normalize(mean=[0, 0, 0], std=[1./255, 1./255, 1./255]),
+        #transforms.Normalize(mean=[103.939, 116.779, 123.68], std=[1, 1, 1]),
+    ])
+    traindir = os.path.join(dataroot)
+    train = datasets.ImageFolder(traindir, transform)
+    dataloader = torch.utils.data.DataLoader(
+        train, 
+        batch_size=batchSize, 
+        shuffle=True, 
+        num_workers=nThreads
+    )
+    if classifier == 'alexnet':
+        clf = alexnet(pretrained=True)
+    elif classifier == 'ppgn':
+        clf = torch.load('/home/mcherti/work/code/external/ppgn/encoder.th')
+    else:
+        sys.path.append(os.path.dirname(classifier))
+        clf = torch.load(classifier)
+    clf.eval()
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    clf_mean = Variable(torch.FloatTensor(mean).view(1, -1, 1, 1)).cuda()
+    clf_std = Variable(torch.FloatTensor(std).view(1, -1, 1, 1)).cuda()
+
+    enc = Enc(clf, clf_mean, clf_std)
+    torch.save(enc, '{}/netE.pth'.format(outf))
+
+    if resume:
+        netG = torch.load('{}/netG.pth'.format(outf))
+    else:
+        #netG = torch.load('/home/mcherti/work/code/external/ppgn/generator.th')
+        #netG = PPGen(nz=4096 + extra_noise)
+        netG = Gen(nz=4096 + extra_noise, imageSize=imageSize)
+        netG.apply(weights_init)
+    if resume:
+        netD = torch.load('{}/netD.pth'.format(outf))
+    else:
+        #netD = PPDiscr()
+        netD = Discr(nc=3, ndf=64, imageSize=imageSize)
+        netD.apply(weights_init)
 
     input = torch.FloatTensor(batchSize, 3, imageSize, imageSize)
     label = torch.FloatTensor(batchSize)
@@ -441,26 +605,39 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
         fixed_noise = torch.FloatTensor(batchSize, extra_noise, 1, 1)
         fixed_noise.normal_(0, 1)
         fixed_noise = Variable(fixed_noise).cuda()
- 
-    real_label = 1
-    fake_label = 0
     mse = lambda x,y: 0.5 * ((x - y)**2).view(x.size(0), -1).mean()
-    criterion = mse
-
+    if wasserstein:
+        real_label = 1
+        fake_label = -1
+        criterion = lambda output, label:(output*label).mean()
+    else:
+        real_label = 1
+        fake_label = 0
+        criterion = nn.BCELoss()
     clf = clf.cuda()
     netG = netG.cuda()
     netD = netD.cuda()
     input = input.cuda()
     label = label.cuda()
-
     optimizerD = optim.Adam(netD.parameters(), lr=lr, betas = (beta1, 0.999))
     optimizerG = optim.Adam(netG.parameters(), lr=lr, betas = (beta1, 0.999))
-
-    stats = defaultdict(list)
-    nb_updates = 0
-    avg_objectness = 0.
-    for epoch in range(niter):
+    if resume:
+        stats = pd.read_csv('{}/stats.csv'.format(outf))
+        stats = [(col, list(stats[col])) for col in stats.columns]
+        stats = dict(stats)
+        start_epoch = max(stats['iter']) // len(dataloader)
+        nb_updates = max(stats['iter'])
+    else:
+        stats = defaultdict(list)
+        start_epoch = 0
+        nb_updates = 0
+    print(netG)
+    for epoch in range(start_epoch, start_epoch + niter):
         for i, data in enumerate(dataloader):
+            if wasserstein:
+                # clamp parameters to a cube
+                for p in netD.parameters():
+                    p.data.clamp_(-0.01, 0.01)
             t = time.time()
             netD.zero_grad()
             real_cpu, _ = data
@@ -470,22 +647,21 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
             if extra_noise:
                 noise.data.resize_(batch_size, extra_noise, 1, 1).normal_(0, 1)
             output = netD(input)
-            errD_real = mse(output, label)
+            if not wasserstein: output = nn.Sigmoid()(output)
+            errD_real = criterion(output, label)
             errD_real.backward()
-            D_x = output.data.mean()
 
             # train with fake
-            hid = encode(input)
+            hid = enc.encode(input)
             hid = hid.view(batch_size, nz, 1, 1)
             if extra_noise:
                 hid = torch.cat((hid, noise), 1)
             fake = netG(hid)
             label.data.fill_(fake_label)
             output = netD(fake.detach())
-            errD_fake = mse(output, label)
+            if not wasserstein: output = nn.Sigmoid()(output)
+            errD_fake = criterion(output, label)
             errD_fake.backward()
-            D_G_z1 = output.data.mean()
-            errD = errD_real + errD_fake
             optimizerD.step()
 
             ############################
@@ -494,45 +670,74 @@ def main(*, imageSize=64, dataroot='.', classifier='alexnet',
             netG.zero_grad()
             label.data.fill_(real_label) # fake labels are real for generator cost
             output = netD(fake)
-
+            if not wasserstein: output = nn.Sigmoid()(output)
             gan_loss = gan_loss_coef * criterion(output, label)
             pixel_loss =  pixel_loss_coef * mse(fake, input)
-            feature_loss = feature_loss_coef * mse(encode2(fake), encode2(input))
-            rec_loss = rec_loss_coef * mse(encode(fake), encode(input))
+            feature_loss = feature_loss_coef * mse(enc.encode2(fake), enc.encode2(input))
+            rec_loss = rec_loss_coef * mse(enc.encode(fake), enc.encode(input))
             errG = pixel_loss + feature_loss + rec_loss + gan_loss
-
-            y = classify(fake)
+            
+            y = enc.classify(fake)
             y = nn.Softmax()(y)
+            errG.backward()
+            optimizerG.step()
             objectness = compute_objectness(y.data)
-            avg_objectness = avg_objectness * 0.9 + objectness * 0.1
-            stats['objectness'].append(objectness)
             stats['iter'].append(nb_updates)
+            stats['objectness'].append(objectness)
             stats['loss'].append(errG.data[0])
             stats['gan_loss'].append(gan_loss.data[0])
             stats['pixel_loss'].append(pixel_loss.data[0])
             stats['feature_loss'].append(feature_loss.data[0])
             stats['rec_loss'].append(rec_loss.data[0])
-            errG.backward()
-            D_G_z2 = output.data.mean()
-            optimizerG.step()
-            delta_t = time.time() - t
-            print('[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f / %.4f, time : %.4f'
-                  % (epoch, niter, i, len(dataloader),
-                     errD.data[0], errG.data[0], D_x, D_G_z1, D_G_z2, delta_t))
+            stats['delta_t'].append(time.time() - t)
+            p = '  '.join(['{} : {:.6f}'.format(k, stats[k][-1]) for k in ('iter', 'objectness', 'loss', 'gan_loss', 'pixel_loss', 'feature_loss', 'rec_loss', 'delta_t')])
+            print(p)
             if nb_updates % 100 == 0:
                 pd.DataFrame(stats).to_csv('{}/stats.csv'.format(outf), index=False)
                 # the first 64 samples from the mini-batch are saved.
-                vutils.save_image((real_cpu[0:64,:,:,:]+1)/2.,
-                        '%s/real_samples.png' % outf, nrow=8)
-                vutils.save_image((fake.data[0:64,:,:,:]+1)/2.,
-                        '%s/fake_samples_epoch_%03d.png' % (outf, epoch), nrow=8)
-
+                im = real_cpu.cpu().numpy()
+                im = grid_of_images_default(im, normalize=True)
+                imsave('{}/real.png'.format(outf), im)
+                im = fake.data.cpu().numpy()
+                im = grid_of_images_default(im, normalize=True)
+                imsave('{}/fake_{:05d}.png'.format(outf, epoch), im)
             nb_updates += 1
         # do checkpointing
-        torch.save(netG.state_dict(), '%s/netG.pth' % (outf))
-        torch.save(netD.state_dict(), '%s/netD.pth' % (outf))
-    return avg_objectness
+        torch.save(netG, '%s/netG.pth' % (outf))
+        torch.save(netD, '%s/netD.pth' % (outf))
+
+
+def generate(*, folder):
+    bs = 16
+    nb_iter = 100
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    clf_mean = Variable(torch.FloatTensor(mean).view(1, -1, 1, 1)).cuda()
+    clf_std = Variable(torch.FloatTensor(std).view(1, -1, 1, 1)).cuda()
+    clf = alexnet(pretrained=True)
+    enc = Enc(clf, clf_mean, clf_std)
+    G = torch.load('%s/netG.pth' % folder)
+    H = torch.rand(bs, 4096) * 30
+    H = H.cuda()
+    G = G.cuda()
+    clf = clf.cuda()
+    x = []
+    eps = 0.1
+    for _ in range(nb_iter):
+        Hvar = Variable(H)
+        Hvar = Hvar.view(Hvar.size(0), Hvar.size(1), 1, 1)
+        X = G(Hvar)
+        Hrec = enc.encode(X)
+        H += eps * (Hrec.data - H)
+        x.append(X.data.cpu().numpy())
+        H.clamp_(0, 30)
+    x = np.array(x)
+    #x = x.transpose((1, 0, 2, 3, 4))
+    shape = (x.shape[0], x.shape[1])
+    im = x.reshape((x.shape[0] * x.shape[1], x.shape[2], x.shape[3], x.shape[4]))
+    im = grid_of_images_default(im, normalize=True, shape=shape)
+    imsave('{}/gen.png'.format(folder), im)
 
 
 if __name__ == '__main__':
-    result = run(main)
+    run([train, generate])
