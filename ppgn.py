@@ -236,98 +236,6 @@ class Gen(nn.Module):
         x = self.conv(x)
         return x
 
-class DCGAN(nn.Module):
-    def __init__(self, nz, ngf=64, imageSize=256):
-        super(DCGAN, self).__init__()
-        if imageSize == 256:
-            self.conv = nn.Sequential(
-                # input is Z, going into a convolution
-                nn.ConvTranspose2d(     nz, ngf * 8, 4, 1, 0, bias=False),
-                nn.BatchNorm2d(ngf * 8),
-                nn.ReLU(True),
-                # state size. (ngf*8) x 4 x 4
-                nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 4),
-                nn.ReLU(True),
-                # state size. (ngf*4) x 8 x 8
-                nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 2),
-                nn.ReLU(True),
-                # state size. (ngf*2) x 16 x 16
-                nn.ConvTranspose2d(ngf * 2,     ngf, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf),
-                nn.ReLU(True),
-
-                nn.ConvTranspose2d(ngf,     ngf, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf),
-                nn.ReLU(True),
-
-                nn.ConvTranspose2d(ngf,     ngf, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf),
-                nn.ReLU(True),
-     
-                # state size. (ngf) x 32 x 32
-                nn.ConvTranspose2d(    ngf,      3, 4, 2, 1, bias=False),
-                nn.Tanh()
-                # state size. (nc) x 64 x 64
-            )
-        elif imageSize == 128:
-            self.conv = nn.Sequential(
-                # input is Z, going into a convolution
-                nn.ConvTranspose2d(     nz, ngf * 8, 4, 1, 0, bias=False),
-                nn.BatchNorm2d(ngf * 8),
-                nn.ReLU(True),
-                # state size. (ngf*8) x 4 x 4
-                nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 4),
-                nn.ReLU(True),
-                # state size. (ngf*4) x 8 x 8
-                nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 2),
-                nn.ReLU(True),
-                # state size. (ngf*2) x 16 x 16
-                nn.ConvTranspose2d(ngf * 2,     ngf, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf),
-                nn.ReLU(True),
-
-                nn.ConvTranspose2d(ngf,     ngf, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf),
-                nn.ReLU(True),
-     
-                # state size. (ngf) x 32 x 32
-                nn.ConvTranspose2d(    ngf,      3, 4, 2, 1, bias=False),
-                nn.Tanh()
-                # state size. (nc) x 64 x 64
-            )
-
-        elif imageSize == 64:
-            self.conv = nn.Sequential(
-                # input is Z, going into a convolution
-                nn.ConvTranspose2d(     nz, ngf * 8, 4, 1, 0, bias=False),
-                nn.BatchNorm2d(ngf * 8),
-                nn.ReLU(True),
-                # state size. (ngf*8) x 4 x 4
-                nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 4),
-                nn.ReLU(True),
-                # state size. (ngf*4) x 8 x 8
-                nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 2),
-                nn.ReLU(True),
-                # state size. (ngf*2) x 16 x 16
-                nn.ConvTranspose2d(ngf * 2,     ngf, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf),
-                nn.ReLU(True),
-                # state size. (ngf) x 32 x 32
-                nn.ConvTranspose2d(    ngf,      3, 4, 2, 1, bias=False),
-                nn.Tanh()
-                # state size. (nc) x 64 x 64
-            )
-
-    def forward(self, input):
-        return self.conv(input)
-
-
 class PPGen(nn.Module):
     def __init__(self, nz=4096):
         super().__init__()
@@ -532,10 +440,12 @@ class Enc:
 def train(*, 
          imageSize=256, 
          cropSize=256,
+         crop_type='center',
          dataroot='/home/mcherti/work/data/shoes/ut-zap50k-images', 
          classifier='alexnet', 
          batchSize=64, 
          nThreads=1, 
+         distributed=False,
          clfImageSize=224, 
          nz=4096,
          extra_noise=0,
@@ -551,7 +461,10 @@ def train(*,
     rec_loss_coef = 0.1
     tf = []
     if cropSize > 0:
-        tf.append(transforms.CenterCrop(cropSize))
+        if crop_type == 'center':
+            tf.append(transforms.CenterCrop(cropSize))
+        elif crop_type == 'random':
+            tf.append(transforms.RandomCrop(cropSize))
     tf.extend([
         transforms.Scale(imageSize),
         transforms.ToTensor(),
@@ -590,6 +503,10 @@ def train(*,
         netG.apply(weights_init)
         netD = Discr(nc=3, ndf=64, imageSize=imageSize)
         netD.apply(weights_init)
+    
+    if distributed:
+        netG = torch.nn.parallel.DataParallel(netG)
+        netD = torch.nn.parallel.DataParallel(netD)
 
     input = torch.FloatTensor(batchSize, 3, imageSize, imageSize)
     label = torch.FloatTensor(batchSize)
@@ -707,9 +624,8 @@ def train(*,
         torch.save(netD, '%s/netD.pth' % (outf))
 
 
-def generate(*, folder):
+def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf='gen.png'):
     bs = 16
-    nb_iter = 100
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
     clf_mean = Variable(torch.FloatTensor(mean).view(1, -1, 1, 1)).cuda()
@@ -717,26 +633,37 @@ def generate(*, folder):
     clf = alexnet(pretrained=True)
     enc = Enc(clf, clf_mean, clf_std)
     G = torch.load('%s/netG.pth' % folder)
-    H = torch.rand(bs, 4096) * 30
+    grads = {}
+    def save_grads(g):
+        grads['h'] = g
+    G.eval()
+    H = torch.rand(bs, 4096, 1, 1) 
     H = H.cuda()
     G = G.cuda()
     clf = clf.cuda()
     x = []
-    eps = 0.1
-    for _ in range(nb_iter):
-        Hvar = Variable(H)
-        Hvar = Hvar.view(Hvar.size(0), Hvar.size(1), 1, 1)
+    
+    for i in range(nb_iter):
+        print(i)
+        Hvar = Variable(H, requires_grad=True)
+        Hvar.register_hook(save_grads)
         X = G(Hvar)
+        y = enc.classify(X)
+        loss = y[:, unit_id].mean()
+        pr = nn.Softmax()(y)
+        print(pr[:, unit_id].mean().data[0])
+        loss.backward()
+        dh = grads['h'].data
         Hrec = enc.encode(X)
-        H += eps * (Hrec.data - H)
+        Hrec = Hrec.view(Hrec.size(0), Hrec.size(1), 1, 1)
+        H += eps1 * (Hrec.data - H) + eps2 * dh# + eps3 * torch.randn(H.size())
         x.append(X.data.cpu().numpy())
-        H.clamp_(0, 30)
+        #H.clamp_(0, 30)
     x = np.array(x)
-    #x = x.transpose((1, 0, 2, 3, 4))
     shape = (x.shape[0], x.shape[1])
     im = x.reshape((x.shape[0] * x.shape[1], x.shape[2], x.shape[3], x.shape[4]))
     im = grid_of_images_default(im, normalize=True, shape=shape)
-    imsave('{}/gen.png'.format(folder), im)
+    imsave('{}/gen/{}'.format(folder, outf), im)
 
 
 if __name__ == '__main__':
