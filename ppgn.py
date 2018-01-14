@@ -17,6 +17,7 @@ from torchvision import datasets
 import torchvision.transforms as transforms
 from torch.autograd import Variable
 
+
 from torchvision.models import alexnet
 
 from machinedesign.viz import grid_of_images_default
@@ -172,36 +173,34 @@ class Gen(nn.Module):
             )
         elif imageSize == 128:
             self.conv = nn.Sequential(
-                nn.ConvTranspose2d(256, 256, 4, 2, 1, bias=False), #deconv5
+                nn.Upsample(scale_factor=2),
+                nn.ConvTranspose2d(256, 256, 3, 1, 1, bias=False), #deconv5
                 nn.BatchNorm2d(256),
                 nn.LeakyReLU(0.3),
 
+                nn.Upsample(scale_factor=2),
                 nn.Conv2d(256, 512, 3, 1, 1, bias=False), #conv5_1
                 nn.BatchNorm2d(512),
                 nn.LeakyReLU(0.3),
 
-                nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False), #decon4
+                nn.Upsample(scale_factor=2),
+                nn.Conv2d(512, 256, 3, 1, 1, bias=False), #decon4
                 nn.BatchNorm2d(256),
                 nn.LeakyReLU(0.3),
-                nn.Conv2d(256, 256, 3, 1, 1, bias=False), #conv4_1
-                nn.BatchNorm2d(256),
-                nn.LeakyReLU(0.3),
-                
-                nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False), #deconv3
+
+                nn.Upsample(scale_factor=2),
+                nn.Conv2d(256, 128, 3, 1, 1, bias=False), #deconv3
                 nn.BatchNorm2d(128),
                 nn.LeakyReLU(0.3),
-                nn.Conv2d(128, 128, 3, 1, 1, bias=False), #conv3_1
-                nn.BatchNorm2d(128),
-                nn.LeakyReLU(0.3),
-             
-                nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False), #deconv2
+
+                nn.Upsample(scale_factor=2),
+                nn.Conv2d(128, 64, 3, 1, 1, bias=False), #deconv3
                 nn.BatchNorm2d(64),
                 nn.LeakyReLU(0.3),
-               
-                nn.ConvTranspose2d(64, 3, 4, 2, 1, bias=False), #deconv0
+
+                nn.ConvTranspose2d(64, 3, 3, 1, 1, bias=False), #deconv3
                 nn.Tanh()
             )
-
         elif imageSize == 64:
             self.conv = nn.Sequential(
                 nn.ConvTranspose2d(256, 256, 4, 2, 1, bias=False), #deconv5
@@ -532,6 +531,7 @@ class Enc:
 
 def train(*, 
          imageSize=256, 
+         cropSize=256,
          dataroot='/home/mcherti/work/data/shoes/ut-zap50k-images', 
          classifier='alexnet', 
          batchSize=64, 
@@ -545,18 +545,19 @@ def train(*,
          wasserstein=False):
     lr = 0.0002
     beta1 = 0.5
-    gan_loss_coef = 0.1
-    pixel_loss_coef = 0.001
-    feature_loss_coef = 0.01
-    rec_loss_coef = 1
-    transform = transforms.Compose([
+    gan_loss_coef = 0.001
+    pixel_loss_coef = 0.1
+    feature_loss_coef = 0.1
+    rec_loss_coef = 0.1
+    tf = []
+    if cropSize > 0:
+        tf.append(transforms.CenterCrop(cropSize))
+    tf.extend([
         transforms.Scale(imageSize),
-        transforms.CenterCrop(imageSize),
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        #transforms.Normalize(mean=[0, 0, 0], std=[1./255, 1./255, 1./255]),
-        #transforms.Normalize(mean=[103.939, 116.779, 123.68], std=[1, 1, 1]),
     ])
+    transform = transforms.Compose(tf)
     traindir = os.path.join(dataroot)
     train = datasets.ImageFolder(traindir, transform)
     dataloader = torch.utils.data.DataLoader(
@@ -583,15 +584,10 @@ def train(*,
 
     if resume:
         netG = torch.load('{}/netG.pth'.format(outf))
-    else:
-        #netG = torch.load('/home/mcherti/work/code/external/ppgn/generator.th')
-        #netG = PPGen(nz=4096 + extra_noise)
-        netG = Gen(nz=4096 + extra_noise, imageSize=imageSize)
-        netG.apply(weights_init)
-    if resume:
         netD = torch.load('{}/netD.pth'.format(outf))
     else:
-        #netD = PPDiscr()
+        netG = Gen(nz=4096 + extra_noise, imageSize=imageSize)
+        netG.apply(weights_init)
         netD = Discr(nc=3, ndf=64, imageSize=imageSize)
         netD.apply(weights_init)
 
@@ -671,17 +667,19 @@ def train(*,
             label.data.fill_(real_label) # fake labels are real for generator cost
             output = netD(fake)
             if not wasserstein: output = nn.Sigmoid()(output)
-            gan_loss = gan_loss_coef * criterion(output, label)
-            pixel_loss =  pixel_loss_coef * mse(fake, input)
-            feature_loss = feature_loss_coef * mse(enc.encode2(fake), enc.encode2(input))
-            rec_loss = rec_loss_coef * mse(enc.encode(fake), enc.encode(input))
-            errG = pixel_loss + feature_loss + rec_loss + gan_loss
-            
+            gan_loss = criterion(output, label)
+            pixel_loss =  mse(fake, input)
+            feature_loss = mse(enc.encode2(fake), enc.encode2(input))
+            rec_loss = mse(enc.encode(fake), enc.encode(input))
+            errG = (pixel_loss_coef * pixel_loss + 
+                    feature_loss_coef * feature_loss + 
+                    rec_loss_coef * rec_loss + 
+                    gan_loss_coef * gan_loss)
             y = enc.classify(fake)
             y = nn.Softmax()(y)
+            objectness = compute_objectness(y.data)
             errG.backward()
             optimizerG.step()
-            objectness = compute_objectness(y.data)
             stats['iter'].append(nb_updates)
             stats['objectness'].append(objectness)
             stats['loss'].append(errG.data[0])
@@ -690,7 +688,9 @@ def train(*,
             stats['feature_loss'].append(feature_loss.data[0])
             stats['rec_loss'].append(rec_loss.data[0])
             stats['delta_t'].append(time.time() - t)
-            p = '  '.join(['{} : {:.6f}'.format(k, stats[k][-1]) for k in ('iter', 'objectness', 'loss', 'gan_loss', 'pixel_loss', 'feature_loss', 'rec_loss', 'delta_t')])
+            labels = ('iter', 'objectness', 'loss', 'gan_loss', 
+                      'pixel_loss', 'feature_loss', 'rec_loss', 'delta_t')
+            p = '  '.join(['{} : {:.6f}'.format(k, stats[k][-1]) for k in labels])
             print(p)
             if nb_updates % 100 == 0:
                 pd.DataFrame(stats).to_csv('{}/stats.csv'.format(outf), index=False)
