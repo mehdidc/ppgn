@@ -138,39 +138,41 @@ class Gen(nn.Module):
         )
         if imageSize == 256:
             self.conv = nn.Sequential(
-                nn.ConvTranspose2d(256, 256, 4, 2, 1, bias=False), #deconv5
+
+                nn.Upsample(scale_factor=2),
+                nn.ConvTranspose2d(256, 256, 3, 1, 1, bias=False), #deconv5
                 nn.BatchNorm2d(256),
                 nn.LeakyReLU(0.3),
 
+                nn.Upsample(scale_factor=2),
+                nn.ConvTranspose2d(256, 256, 3, 1, 1, bias=False), #deconv5
+                nn.BatchNorm2d(256),
+                nn.LeakyReLU(0.3),
+
+                nn.Upsample(scale_factor=2),
                 nn.Conv2d(256, 512, 3, 1, 1, bias=False), #conv5_1
                 nn.BatchNorm2d(512),
                 nn.LeakyReLU(0.3),
 
-                nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False), #decon4
+                nn.Upsample(scale_factor=2),
+                nn.Conv2d(512, 256, 3, 1, 1, bias=False), #decon4
                 nn.BatchNorm2d(256),
                 nn.LeakyReLU(0.3),
-                nn.Conv2d(256, 256, 3, 1, 1, bias=False), #conv4_1
-                nn.BatchNorm2d(256),
-                nn.LeakyReLU(0.3),
-                
-                nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False), #deconv3
+
+                nn.Upsample(scale_factor=2),
+                nn.Conv2d(256, 128, 3, 1, 1, bias=False), #deconv3
                 nn.BatchNorm2d(128),
                 nn.LeakyReLU(0.3),
-                nn.Conv2d(128, 128, 3, 1, 1, bias=False), #conv3_1
-                nn.BatchNorm2d(128),
-                nn.LeakyReLU(0.3),
-             
-                nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False), #deconv2
+
+                nn.Upsample(scale_factor=2),
+                nn.Conv2d(128, 64, 3, 1, 1, bias=False), #deconv3
                 nn.BatchNorm2d(64),
                 nn.LeakyReLU(0.3),
 
-                nn.ConvTranspose2d(64, 32, 4, 2, 1, bias=False), #deconv1
-                nn.BatchNorm2d(32),
-                nn.LeakyReLU(0.3),
-                
-                nn.ConvTranspose2d(32, 3, 4, 2, 1, bias=False), #deconv0
+                nn.ConvTranspose2d(64, 3, 3, 1, 1, bias=False), #deconv3
                 nn.Tanh()
             )
+
         elif imageSize == 128:
             self.conv = nn.Sequential(
                 nn.Upsample(scale_factor=2),
@@ -201,33 +203,8 @@ class Gen(nn.Module):
                 nn.ConvTranspose2d(64, 3, 3, 1, 1, bias=False), #deconv3
                 nn.Tanh()
             )
-        elif imageSize == 64:
-            self.conv = nn.Sequential(
-                nn.ConvTranspose2d(256, 256, 4, 2, 1, bias=False), #deconv5
-                nn.BatchNorm2d(256),
-                nn.LeakyReLU(0.3),
-
-                nn.Conv2d(256, 512, 3, 1, 1, bias=False), #conv5_1
-                nn.BatchNorm2d(512),
-                nn.LeakyReLU(0.3),
-
-                nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False), #decon4
-                nn.BatchNorm2d(256),
-                nn.LeakyReLU(0.3),
-                nn.Conv2d(256, 256, 3, 1, 1, bias=False), #conv4_1
-                nn.BatchNorm2d(256),
-                nn.LeakyReLU(0.3),
-                
-                nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False), #deconv3
-                nn.BatchNorm2d(128),
-                nn.LeakyReLU(0.3),
-                nn.Conv2d(128, 128, 3, 1, 1, bias=False), #conv3_1
-                nn.BatchNorm2d(128),
-                nn.LeakyReLU(0.3),
-             
-                nn.ConvTranspose2d(128, 3, 4, 2, 1, bias=False), #deconv0
-                nn.Tanh()
-            )
+        else:
+            raise ValueError()
 
     def forward(self, x):
         x = x.view(x.size(0), -1)
@@ -438,7 +415,10 @@ class Enc:
 
 
 def train(*, 
+         preprocess='crop_scale', # or scale_crop
+         rescale_force=False,
          imageSize=256, 
+         rescaleSize=0,
          cropSize=256,
          crop_type='center',
          dataroot='/home/mcherti/work/data/shoes/ut-zap50k-images', 
@@ -453,6 +433,7 @@ def train(*,
          outf='out',
          resume=False,
          wasserstein=False):
+
     lr = 0.0002
     beta1 = 0.5
     gan_loss_coef = 0.001
@@ -460,13 +441,30 @@ def train(*,
     feature_loss_coef = 0.1
     rec_loss_coef = 0.1
     tf = []
+    
+    if rescaleSize == 0:
+        rescaleSize = imageSize
+
+    if rescale_force:
+        scale = transforms.Scale((rescaleSize, rescaleSize))
+    else:
+        scale = transforms.Scale(rescaleSize)
+    
     if cropSize > 0:
         if crop_type == 'center':
-            tf.append(transforms.CenterCrop(cropSize))
+            crop = transforms.CenterCrop(cropSize)
         elif crop_type == 'random':
-            tf.append(transforms.RandomCrop(cropSize))
+            crop = transforms.RandomResizedCrop(cropSize)
+
+    if preprocess == 'scale_crop':
+        tf.append(scale)
+        tf.append(crop)
+    elif preprocess == 'crop_scale':
+        tf.append(crop)
+        tf.append(scale)
+    else:
+        raise ValueError()
     tf.extend([
-        transforms.Scale(imageSize),
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
@@ -624,8 +622,8 @@ def train(*,
         torch.save(netD, '%s/netD.pth' % (outf))
 
 
-def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf='gen.png'):
-    bs = 16
+def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf='gen.png', nb=16):
+    bs = nb
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
     clf_mean = Variable(torch.FloatTensor(mean).view(1, -1, 1, 1)).cuda()
