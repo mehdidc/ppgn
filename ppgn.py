@@ -498,6 +498,10 @@ def train(*,
     if resume:
         netG = torch.load('{}/netG.pth'.format(outf))
         netD = torch.load('{}/netD.pth'.format(outf))
+        if 'DataParallel' in netG.__class__.__name__:
+            netG = netG.module
+        if 'DataParallel' in netD.__class__.__name__:
+            netD = netD.module
         print(type(netG), type(netD))
         netG = netG.cuda()
         netD = netD.cuda()
