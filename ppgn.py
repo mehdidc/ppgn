@@ -288,7 +288,7 @@ def train(*,
          crop_type='center', # 'center'/''crop
          dataroot='.', #location of data
          classifier='alexnet', # classifier type
-         clf_image_size=224, # size required for classifier (alexnet is 224)
+         clf_image_size=224, # size required for classifier (for alexnet it is 224)
          batch_size=64, # batch size
          nThreads=1, # number of image loading threads
          distributed=False, # whether to distribute the model over GPUs
@@ -332,7 +332,7 @@ def train(*,
         if crop: tf.append(crop)
         tf.append(scale)
     else:
-        raise ValueError('unknown value for preprocess')
+        raise ValueError('unknown value for "preprocess" : {}'.format(preprocess))
     tf.extend([
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
