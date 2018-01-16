@@ -33,9 +33,9 @@ def compute_objectness(v):
     return score
 
 class Discr(nn.Module):
-    def __init__(self, nc, ndf, imageSize=256):
+    def __init__(self, nc, ndf, image_size=256):
         super(Discr, self).__init__()
-        if imageSize == 256:
+        if image_size == 256:
             self.main = nn.Sequential(
                 # input is (nc) x 64 x 64
                 nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
@@ -65,7 +65,7 @@ class Discr(nn.Module):
                 nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
                 #nn.Sigmoid()
             )
-        elif imageSize == 128:
+        elif image_size == 128:
             self.main = nn.Sequential(
                 # input is (nc) x 64 x 64
                 nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
@@ -92,7 +92,7 @@ class Discr(nn.Module):
                 #nn.Sigmoid()
             )
 
-        elif imageSize == 64:
+        elif image_size == 64:
             self.main = nn.Sequential(
                 # input is (nc) x 64 x 64
                 nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
@@ -121,7 +121,7 @@ class Discr(nn.Module):
 
 class Gen(nn.Module):
     
-    def __init__(self, nz, imageSize=256):
+    def __init__(self, nz, image_size=256):
         super(Gen, self).__init__()
         self.fc = nn.Sequential(
             nn.Linear(nz, 4096), #defc7
@@ -136,9 +136,8 @@ class Gen(nn.Module):
             nn.BatchNorm1d(4096),
             nn.LeakyReLU(0.3),
         )
-        if imageSize == 256:
+        if image_size == 256:
             self.conv = nn.Sequential(
-
                 nn.Upsample(scale_factor=2),
                 nn.ConvTranspose2d(256, 256, 3, 1, 1, bias=False), #deconv5
                 nn.BatchNorm2d(256),
@@ -173,7 +172,7 @@ class Gen(nn.Module):
                 nn.Tanh()
             )
 
-        elif imageSize == 128:
+        elif image_size == 128:
             self.conv = nn.Sequential(
                 nn.Upsample(scale_factor=2),
                 nn.ConvTranspose2d(256, 256, 3, 1, 1, bias=False), #deconv5
@@ -213,101 +212,6 @@ class Gen(nn.Module):
         x = self.conv(x)
         return x
 
-class PPGen(nn.Module):
-    def __init__(self, nz=4096):
-        super().__init__()
-        self.fc = nn.Sequential(
-            nn.Linear(nz,  4096), #defc7
-            nn.BatchNorm1d(4096),
-            nn.LeakyReLU(0.3),
-            nn.Linear(4096, 4096), #defc6
-            nn.BatchNorm1d(4096),
-            nn.LeakyReLU(0.3),
-            nn.Linear(4096, 4096), #defc5
-            nn.BatchNorm1d(4096),
-            nn.LeakyReLU(0.3),
-        )
-        self.conv = nn.Sequential(
-            nn.ConvTranspose2d(256, 256, 4, 2, 1, bias=False), #deconv5
-            nn.BatchNorm2d(256), 
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(256, 512, 3, 1, 1, bias=False), #conv5_1
-            nn.BatchNorm2d(512), 
-            nn.LeakyReLU(0.3),
-
-            nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False), #decon4
-            nn.BatchNorm2d(256), 
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(256, 256, 3, 1, 1, bias=False), #conv4_1
-            nn.BatchNorm2d(256), 
-            nn.LeakyReLU(0.3),
-            
-            nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False), #deconv3
-            nn.BatchNorm2d(128), 
-            nn.LeakyReLU(0.3),
-            nn.Conv2d(128, 128, 3, 1, 1, bias=False), #conv3_1
-            nn.BatchNorm2d(128), 
-            nn.LeakyReLU(0.3),
-         
-            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False), #deconv2
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.3),
-
-            nn.ConvTranspose2d(64, 32, 4, 2, 1, bias=False), #deconv1
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.3),
-            
-            nn.ConvTranspose2d(32, 3, 4, 2, 1, bias=False), #deconv0
-            nn.Tanh(),
-        )
-
-    def forward(self, input):
-        x = input.view(input.size(0), input.size(1))
-        x = self.fc(x)
-        x = x.view(x.size(0), 256, 4, 4)
-        x = self.conv(x)
-        return x
-
-
-class PPDiscr(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(64, 192, kernel_size=5, padding=2),
-            nn.BatchNorm2d(192),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(192, 384, kernel_size=3, padding=1),
-            nn.BatchNorm2d(384),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(384, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-        )
-        self.classifier = nn.Sequential(
-            nn.Linear(256 * 7 * 7, 4096),
-            nn.BatchNorm1d(4096),
-            nn.ReLU(inplace=True),
-            nn.Linear(4096, 4096),
-            nn.BatchNorm1d(4096),
-            nn.ReLU(inplace=True),
-            nn.Linear(4096, 1),
-        )
-
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), 256 * 7 * 7)
-        x = self.classifier(x)
-        return x[:, 0]
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -323,44 +227,6 @@ def weights_init(m):
 def _flatten(x):
     return x.view(x.size(0), -1)
 
-Generator = PPGen
-
-class Encoder(nn.Module):
-
-    def __init__(self, num_classes=1000):
-        super(Encoder, self).__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(64, 192, kernel_size=5, padding=2),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(192, 384, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(384, 256, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-        )
-        self.classifier = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(256 * 6 * 6, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Linear(4096, num_classes),
-        )
-        self.image_mean = None
-    
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), 256 * 6 * 6)
-        x = self.classifier(x)
-        return x
-
 
 class Enc:
 
@@ -368,7 +234,7 @@ class Enc:
         self.clf = clf
         self.mu = mu
         self.std = std
-        self.clfImageSize = image_size
+        self.clf_image_size = image_size
 
     def norm(self, x):
         x = (x + 1) / 2.
@@ -379,7 +245,7 @@ class Enc:
     def prep(self, x):
         if x.size(2) != 256:
             x = torch.nn.UpsamplingBilinear2d(scale_factor=256//x.size(2))(x)
-        p = 256 - self.clfImageSize
+        p = 256 - self.clf_image_size
         if p > 0:
             x = x[:, :, p//2:-p//2, p//2:-p//2]
         x = self.norm(x)
@@ -413,24 +279,23 @@ class Enc:
         return x
 
 
-
 def train(*, 
-         preprocess='crop_scale', # or scale_crop
-         rescale_force=False,
-         imageSize=256, 
-         rescaleSize=0,
-         cropSize=256,
-         crop_type='center',
-         dataroot='/home/mcherti/work/data/shoes/ut-zap50k-images', 
-         classifier='alexnet', 
-         batchSize=64, 
-         nThreads=1, 
-         distributed=False,
-         clfImageSize=224, 
-         nz=4096,
-         extra_noise=0,
-         niter=100000,
-         outf='out',
+         preprocess='crop_scale', # preprocessing procedure. crop_scale or scale_crop, determines the order.
+         rescale_force=False, # force rescale to (image_size, image_size)
+         image_size=256, # image size to generate
+         rescale_size=0, # size to rescale
+         crop_size=256, # size to crop
+         crop_type='center', # 'center'/''crop
+         dataroot='.', #location of data
+         classifier='alexnet', # classifier type
+         clf_image_size=224, # size required for classifier (alexnet is 224)
+         batch_size=64, # batch size
+         nThreads=1, # number of image loading threads
+         distributed=False, # whether to distribute the model over GPUs
+         nz=4096, # size of latent
+         extra_noise=0, # additional extra noise
+         niter=100000, # number of epochs
+         outf='out', # output folder
          resume=False,
          wasserstein=False):
 
@@ -440,21 +305,23 @@ def train(*,
     pixel_loss_coef = 0.1
     feature_loss_coef = 0.1
     rec_loss_coef = 0.1
-    tf = []
     
-    if rescaleSize == 0:
-        rescaleSize = imageSize
+    # Preprocess
+
+    tf = []
+    if rescale_size == 0:
+        rescale_size = image_size
 
     if rescale_force:
-        scale = transforms.Scale((rescaleSize, rescaleSize))
+        scale = transforms.Scale((rescale_size, rescale_size))
     else:
-        scale = transforms.Scale(rescaleSize)
+        scale = transforms.Scale(rescale_size)
     
-    if cropSize > 0:
+    if crop_size > 0:
         if crop_type == 'center':
-            crop = transforms.CenterCrop(cropSize)
+            crop = transforms.CenterCrop(crop_size)
         elif crop_type == 'random':
-            crop = transforms.RandomResizedCrop(cropSize)
+            crop = transforms.RandomResizedCrop(crop_size)
     else:
         crop = None
 
@@ -475,14 +342,15 @@ def train(*,
     train = datasets.ImageFolder(traindir, transform)
     dataloader = torch.utils.data.DataLoader(
         train, 
-        batch_size=batchSize, 
+        batch_size=batch_size, 
         shuffle=True, 
         num_workers=nThreads
     )
+    # Set up the classifier
     if classifier == 'alexnet':
         clf = alexnet(pretrained=True)
     elif classifier == 'ppgn':
-        clf = torch.load('/home/mcherti/work/code/external/ppgn/encoder.th')
+        clf = torch.load('../external/ppgn/encoder.th')
     else:
         sys.path.append(os.path.dirname(classifier))
         clf = torch.load(classifier)
@@ -492,9 +360,11 @@ def train(*,
     clf_mean = Variable(torch.FloatTensor(mean).view(1, -1, 1, 1)).cuda()
     clf_std = Variable(torch.FloatTensor(std).view(1, -1, 1, 1)).cuda()
 
+    # Set up the encoder from the classifier
     enc = Enc(clf, clf_mean, clf_std)
     torch.save(enc, '{}/netE.pth'.format(outf))
-
+    
+    # Setup the discriminator and the generator
     if resume:
         netG = torch.load('{}/netG.pth'.format(outf))
         netD = torch.load('{}/netD.pth'.format(outf))
@@ -506,22 +376,23 @@ def train(*,
         netG = netG.cuda()
         netD = netD.cuda()
     else:
-        netG = Gen(nz=4096 + extra_noise, imageSize=imageSize)
+        netG = Gen(nz=4096 + extra_noise, image_size=image_size)
         netG.apply(weights_init)
-        netD = Discr(nc=3, ndf=64, imageSize=imageSize)
+        netD = Discr(nc=3, ndf=64, image_size=image_size)
         netD.apply(weights_init)
     if distributed:
         netG = torch.nn.parallel.DataParallel(netG)
         netD = torch.nn.parallel.DataParallel(netD)
-
-    input = torch.FloatTensor(batchSize, 3, imageSize, imageSize)
-    label = torch.FloatTensor(batchSize)
+    
+    # Setup the input variable and the loss
+    input = torch.FloatTensor(batch_size, 3, image_size, image_size)
+    label = torch.FloatTensor(batch_size)
     input = Variable(input)
     label = Variable(label)
     if extra_noise:
-        noise = torch.FloatTensor(batchSize, extra_noise, 1, 1)
+        noise = torch.FloatTensor(batch_size, extra_noise, 1, 1)
         noise = Variable(noise).cuda()
-        fixed_noise = torch.FloatTensor(batchSize, extra_noise, 1, 1)
+        fixed_noise = torch.FloatTensor(batch_size, extra_noise, 1, 1)
         fixed_noise.normal_(0, 1)
         fixed_noise = Variable(fixed_noise).cuda()
     mse = lambda x,y: 0.5 * ((x - y)**2).view(x.size(0), -1).mean()
@@ -533,6 +404,7 @@ def train(*,
         real_label = 1
         fake_label = 0
         criterion = nn.BCELoss()
+    # Init
     clf = clf.cuda()
     netG = netG.cuda()
     netD = netD.cuda()
@@ -550,7 +422,7 @@ def train(*,
         stats = defaultdict(list)
         start_epoch = 0
         nb_updates = 0
-    print(netG)
+    # Train !
     for epoch in range(start_epoch, start_epoch + niter):
         for i, data in enumerate(dataloader):
             if wasserstein:
@@ -558,7 +430,12 @@ def train(*,
                 for p in netD.parameters():
                     p.data.clamp_(-0.01, 0.01)
             t = time.time()
+
+            # Update discriminator
+            
             netD.zero_grad()
+
+            # 1) train with real data
             real_cpu, _ = data
             batch_size = real_cpu.size(0)
             input.data.resize_(real_cpu.size()).copy_(real_cpu)
@@ -569,8 +446,8 @@ def train(*,
             if not wasserstein: output = nn.Sigmoid()(output)
             errD_real = criterion(output, label)
             errD_real.backward()
-
-            # train with fake
+            
+            # 2) train with fake data
             hid = enc.encode(input)
             hid = hid.view(batch_size, nz, 1, 1)
             if extra_noise:
@@ -582,12 +459,10 @@ def train(*,
             errD_fake = criterion(output, label)
             errD_fake.backward()
             optimizerD.step()
-
-            ############################
-            # (2) Update G network: maximize log(D(G(z)))
-            ###########################
+            
+            # Update generator
             netG.zero_grad()
-            label.data.fill_(real_label) # fake labels are real for generator cost
+            label.data.fill_(real_label)
             output = netD(fake)
             if not wasserstein: output = nn.Sigmoid()(output)
             gan_loss = criterion(output, label)
@@ -603,6 +478,7 @@ def train(*,
             objectness = compute_objectness(y.data)
             errG.backward()
             optimizerG.step()
+            # fill stats
             stats['iter'].append(nb_updates)
             stats['objectness'].append(objectness)
             stats['loss'].append(errG.data[0])
@@ -617,19 +493,16 @@ def train(*,
             print(p)
             if nb_updates % 100 == 0:
                 pd.DataFrame(stats).to_csv('{}/stats.csv'.format(outf), index=False)
-                # the first 64 samples from the mini-batch are saved.
                 im = real_cpu.cpu().numpy()
                 im = grid_of_images_default(im, normalize=True)
                 imsave('{}/real.png'.format(outf), im)
                 im = fake.data.cpu().numpy()
                 im = grid_of_images_default(im, normalize=True)
                 imsave('{}/fake_{:05d}.png'.format(outf, epoch), im)
-
                 m = netG.module if distributed else netG
                 torch.save(m, '%s/netG.pth' % (outf))
                 m = netD.module if distributed else netD
                 torch.save(m, '%s/netD.pth' % (outf))
-
             nb_updates += 1
 
 
@@ -641,7 +514,7 @@ def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf=
     clf_std = Variable(torch.FloatTensor(std).view(1, -1, 1, 1)).cuda()
     clf = alexnet(pretrained=True)
     enc = Enc(clf, clf_mean, clf_std)
-    G = torch.load('%s/netG.pth' % folder)
+    G = torch.load("%s/netG.pth".format(folder))
     grads = {}
     def save_grads(g):
         grads['h'] = g
@@ -651,7 +524,6 @@ def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf=
     G = G.cuda()
     clf = clf.cuda()
     x = []
-    
     for i in range(nb_iter):
         Hvar = Variable(H, requires_grad=True)
         Hvar.register_hook(save_grads)
