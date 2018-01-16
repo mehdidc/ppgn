@@ -455,15 +455,17 @@ def train(*,
             crop = transforms.CenterCrop(cropSize)
         elif crop_type == 'random':
             crop = transforms.RandomResizedCrop(cropSize)
+    else:
+        crop = None
 
     if preprocess == 'scale_crop':
         tf.append(scale)
-        tf.append(crop)
+        if crop:tf.append(crop)
     elif preprocess == 'crop_scale':
-        tf.append(crop)
+        if crop: tf.append(crop)
         tf.append(scale)
     else:
-        raise ValueError()
+        raise ValueError('unknown value for preprocess')
     tf.extend([
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
@@ -496,12 +498,14 @@ def train(*,
     if resume:
         netG = torch.load('{}/netG.pth'.format(outf))
         netD = torch.load('{}/netD.pth'.format(outf))
+        print(type(netG), type(netD))
+        netG = netG.cuda()
+        netD = netD.cuda()
     else:
         netG = Gen(nz=4096 + extra_noise, imageSize=imageSize)
         netG.apply(weights_init)
         netD = Discr(nc=3, ndf=64, imageSize=imageSize)
         netD.apply(weights_init)
-    
     if distributed:
         netG = torch.nn.parallel.DataParallel(netG)
         netD = torch.nn.parallel.DataParallel(netD)
@@ -616,10 +620,13 @@ def train(*,
                 im = fake.data.cpu().numpy()
                 im = grid_of_images_default(im, normalize=True)
                 imsave('{}/fake_{:05d}.png'.format(outf, epoch), im)
+
+                m = netG.module if distributed else netG
+                torch.save(m, '%s/netG.pth' % (outf))
+                m = netD.module if distributed else netD
+                torch.save(m, '%s/netD.pth' % (outf))
+
             nb_updates += 1
-        # do checkpointing
-        torch.save(netG, '%s/netG.pth' % (outf))
-        torch.save(netD, '%s/netD.pth' % (outf))
 
 
 def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf='gen.png', nb=16):
@@ -642,7 +649,6 @@ def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf=
     x = []
     
     for i in range(nb_iter):
-        print(i)
         Hvar = Variable(H, requires_grad=True)
         Hvar.register_hook(save_grads)
         X = G(Hvar)
