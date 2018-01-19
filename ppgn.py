@@ -514,7 +514,7 @@ def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf=
     clf_std = Variable(torch.FloatTensor(std).view(1, -1, 1, 1)).cuda()
     clf = alexnet(pretrained=True)
     enc = Enc(clf, clf_mean, clf_std)
-    G = torch.load("%s/netG.pth".format(folder))
+    G = torch.load("{}/netG.pth".format(folder))
     grads = {}
     def save_grads(g):
         grads['h'] = g
@@ -545,6 +545,8 @@ def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf=
     im = grid_of_images_default(im, normalize=True, shape=shape)
     imsave('{}/gen/{}'.format(folder, outf), im)
 
+def caption(*, folder):
+    pass
 
 if __name__ == '__main__':
-    run([train, generate])
+    run([train, generate, caption])
