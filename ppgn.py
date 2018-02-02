@@ -297,9 +297,9 @@ def train(*,
          niter=100000, # number of epochs
          outf='out', # output folder
          resume=False,
-         wasserstein=False):
+         wasserstein=False,
+        lr = 0.0002):
 
-    lr = 0.0002
     beta1 = 0.5
     gan_loss_coef = 0.001
     pixel_loss_coef = 0.1
@@ -506,7 +506,7 @@ def train(*,
             nb_updates += 1
 
 
-def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf='gen.png', nb=16):
+def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf='gen', nb=16):
     bs = nb
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -542,8 +542,10 @@ def generate(*, folder, eps1=1., eps2=0., eps3=0., unit_id=0, nb_iter=100, outf=
     x = np.array(x)
     shape = (x.shape[0], x.shape[1])
     im = x.reshape((x.shape[0] * x.shape[1], x.shape[2], x.shape[3], x.shape[4]))
+    g = im
     im = grid_of_images_default(im, normalize=True, shape=shape)
-    imsave('{}/gen/{}'.format(folder, outf), im)
+    imsave('{}/gen/{}.png'.format(folder, outf), im)
+    np.savez('{}/gen/{}.npz'.format(folder, outf), X=g)
 
 def caption(*, folder):
     pass
